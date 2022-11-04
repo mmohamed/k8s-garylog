@@ -1,0 +1,13 @@
+server_url: ${GS_SERVER_URL}
+server_api_token: ${GS_API_TOKEN}
+node_name: ${GS_NAME}
+update_interval: ${GS_UPDATE_INTERVAL}
+tls_skip_verify: ${GS_TLS_SKIP_VERIFY}
+send_status: ${GS_SEND_STATUS}
+list_log_files: ${GS_LIST_LOG_FILES}
+node_id: ${GS_NODE_ID}
+log_path: /var/log/graylog-sidecar
+log_rotate_max_file_size: ${GS_LOG_ROTATION_SIZE}
+log_rotate_keep_files: ${GS_LOG_OLD_KEEP}
+tags: ${GS_TAGS}
+collector_binaries_accesslist: [/usr/share/filebeat/filebeat]

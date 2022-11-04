@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-with-sidecar
+  namespace: graylog
+spec:
+  nodeSelector:
+    kubernetes.io/arch: arm64
+  containers:
+  - image: debian:buster-slim
+    name: app
+    args: [
+      /bin/sh,
+      -c,
+      "apt update && apt-get install -q -y rsyslog; echo \"app /log/app.log\" >> /etc/rsyslog.conf; service rsyslog start; i=0; while true; do logger -s \"{\"time\":$(date +%s),\"msg\":\"This is my dummy log number ${i}\"}\"; i=$((i+1)); sleep 30; done"
+    ]
+    volumeMounts:
+    - mountPath: /log
+      name: log-volume
+  - image: medinvention/graylog-sidecar-filebeat:1.2.0
+    name: sidecar
+    env:
+    - name: GS_SERVER_URL
+      value: --<GRAYLOG-HOST>--/api
+    - name: GS_LIST_LOG_FILES
+      value: "/app-log"
+    - name: GS_API_TOKEN
+      value: --<GRAYLOG-SIDECARE-API-TOKEN>--
+    - name: GS_NAME
+      value: "myapp"
+    - name: GS_NODE_ID
+      value: --<GRAYLOG-SIDECARE-ID>--
+    volumeMounts:
+    - mountPath: /app-log
+      name: log-volume
+  volumes:
+  - name: log-volume
+    emptyDir: {}

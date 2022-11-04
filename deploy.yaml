@@ -1,0 +1,343 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: graylog
+  namespace: graylog
+  labels:
+    app.kubernetes.io/name: graylog
+data:
+  log4j2.xml: |-
+    <?xml version="1.0" encoding="UTF-8"?>
+    <Configuration packages="org.graylog2.log4j" shutdownHook="disable">
+        <Appenders>
+            <Console name="STDOUT" target="SYSTEM_OUT">
+                <PatternLayout pattern="%d %-7level [%c{1}] - %m - %X%n"/>
+            </Console>
+            <RollingFile name="rolling-file" fileName="/usr/share/graylog/log/server.log" filePattern="/usr/share/graylog/log/server.log.%i.gz">
+                <PatternLayout>
+                    <Pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5p [%c{1}] %m%n</Pattern>
+                </PatternLayout>
+                <Policies>
+                    <SizeBasedTriggeringPolicy size="50MB"/>
+                </Policies>
+                <DefaultRolloverStrategy max="10" fileIndex="min"/>
+            </RollingFile>
+            <Memory name="graylog-internal-logs" bufferSize="500"/>
+            <RollingFile name="AUDITLOG" fileName="/usr/share/graylog/log/audit.log" filePattern="/usr/share/graylog/log/audit-%d{yyyy-MM-dd}.log.gz">
+                <PatternLayout>
+                    <Pattern>%d [%c{1}] - %m - %X%n</Pattern>
+                </PatternLayout>
+                <Policies>
+                    <TimeBasedTriggeringPolicy />
+                </Policies>
+            </RollingFile>
+        </Appenders>
+        <Loggers>
+            <Logger name="org.graylog2" level="warn"/>
+            <Logger name="com.github.joschi.jadconfig" level="warn"/>
+            <Logger name="org.apache.directory.api.ldap.model.message.BindRequestImpl" level="error"/>
+            <Logger name="org.elasticsearch.script" level="warn"/>
+            <Logger name="org.graylog2.periodical.VersionCheckThread" level="off"/>
+            <Logger name="org.drools.compiler.kie.builder.impl.KieRepositoryImpl" level="warn"/>
+            <Logger name="com.joestelmach.natty.Parser" level="warn"/>
+            <Logger name="kafka.log.Log" level="warn"/>
+            <Logger name="kafka.log.OffsetIndex" level="warn"/>
+            <Logger name="org.apache.shiro.session.mgt.AbstractValidatingSessionManager" level="warn"/>
+            <Root level="warn">
+                <AppenderRef ref="STDOUT"/>
+            </Root>
+          <Logger name="org.graylog2.security.realm.PasswordAuthenticator" level="trace" additivity="false">
+                <AppenderRef ref="AUDITLOG"/>
+            </Logger>
+            <Logger name="org.graylog2.security.realm.AccessTokenAuthenticator" level="trace" additivity="false">
+                <AppenderRef ref="AUDITLOG"/>
+            </Logger>
+            <Logger name="org.graylog2.security.realm.RootAccountRealm" level="trace" additivity="false">
+                <AppenderRef ref="AUDITLOG"/>
+            </Logger>
+            <Logger name="org.graylog2.shared.security.ShiroAuthorizationFilter" level="trace" additivity="false">
+                <AppenderRef ref="AUDITLOG"/>
+            </Logger>
+        </Loggers>
+    </Configuration>
+  graylog.conf: |-
+    node_id_file = /usr/share/graylog/data/journal/node-id
+    root_username = admin
+    root_email = 
+    root_timezone = UTC
+    http_bind_address = 0.0.0.0:9000
+    http_publish_uri = https://graylog.medinvention.dev
+    elasticsearch_hosts = http://es.graylog.svc.cluster.local:9200
+    allow_leading_wildcard_searches = false
+    allow_highlighting = false
+    output_batch_size = 500
+    output_flush_interval = 1
+    output_fault_count_threshold = 5
+    output_fault_penalty_seconds = 30
+    processbuffer_processors = 5
+    outputbuffer_processors = 3
+    processor_wait_strategy = blocking
+    ring_size = 65536
+    inputbuffer_ring_size = 65536
+    inputbuffer_processors = 2
+    inputbuffer_wait_strategy = blocking
+    message_journal_enabled = true
+    message_journal_dir = /usr/share/graylog/data/journal
+    message_journal_max_size = 5gb
+    lb_recognition_period_seconds = 3
+    mongodb_uri = mongodb://mongo.graylog.svc.cluster.local:27017/graylog
+    mongodb_max_connections = 1000
+    mongodb_threads_allowed_to_block_multiplier = 5
+    transport_email_enabled = false
+    transport_email_hostname = 
+    transport_email_port = 2587
+    transport_email_use_auth = true
+    transport_email_use_tls = true
+    transport_email_use_ssl = false
+    transport_email_auth_username = 
+    transport_email_auth_password = 
+    transport_email_subject_prefix = [graylog]
+    transport_email_from_email = 
+    gc_warning_threshold = 1s
+    content_packs_dir = /usr/share/graylog/data/contentpacks
+    content_packs_auto_load = grok-patterns.json
+    proxied_requests_thread_pool_size = 32
+  entrypoint.sh: |-
+    #!/usr/bin/env bash
+
+    GRAYLOG_HOME=/usr/share/graylog
+    export GRAYLOG_PLUGIN_DIR=${GRAYLOG_HOME}/plugin
+    # Graylog 4.0.2 images move plugin dir to `plugins-default`
+    find ${GRAYLOG_HOME}/plugins-default/ -type f -exec cp {} ${GRAYLOG_PLUGIN_DIR} \;
+    # Looking for Master IP
+    retry=1
+    for i in {0..2}
+    do
+      MASTER_IP=`/k8s/kubectl --namespace graylog get pod -o jsonpath='{range .items[*]}{.metadata.name} {.status.podIP}{"\n"}{end}' -l graylog-role=master --field-selector=status.phase=Running|awk '{print $2}'`
+      SELF_IP=`/k8s/kubectl --namespace graylog get pod $HOSTNAME -o jsonpath='{.status.podIP}'`
+      echo "Current master is $MASTER_IP"
+      echo "Self IP is $SELF_IP"
+      retry=$((retry+1))
+      [[ ! -z "$MASTER_IP" ]] && break
+      echo "[Try ${retry}/3] Waiting for master node..."
+      sleep 2
+    done
+    if [[ -z "$MASTER_IP" ]]; then
+      echo "Launching $HOSTNAME as master"
+      export GRAYLOG_IS_MASTER="true"
+      /k8s/kubectl --namespace graylog label --overwrite pod $HOSTNAME graylog-role="master"
+    else
+      # When container was recreated or restart, MASTER_IP == SELF_IP, running as master and no need to change label graylog-role="master"
+      if [ "$SELF_IP" == "$MASTER_IP" ];then
+        echo "Launching $HOSTNAME as master"
+        export GRAYLOG_IS_MASTER="true"
+      else
+        # MASTER_IP != SELF_IP, running as coordinating
+        echo "Launching $HOSTNAME as coordinating"
+        export GRAYLOG_IS_MASTER="false"
+        /k8s/kubectl --namespace graylog label --overwrite pod $HOSTNAME graylog-role="coordinating"
+      fi
+    fi
+    # Download plugins
+    # Start Graylog
+    echo "Starting graylog"
+    # Original docker-entrypoint.sh in Graylog Docker will error while executing since you can't chown readonly files in `config`
+    # exec /docker-entrypoint.sh graylog
+    export GRAYLOG_ELASTICSEARCH_VERSION=7
+    echo "Graylog Home ${GRAYLOG_HOME}"
+    echo "Graylog Plugin Dir ${GRAYLOG_PLUGIN_DIR}"
+    echo "Graylog Elasticsearch Version ${GRAYLOG_ELASTICSEARCH_VERSION}"
+    "${JAVA_HOME}/bin/java" \
+      ${GRAYLOG_SERVER_JAVA_OPTS} \
+      -jar \
+      -Dlog4j.configurationFile=${GRAYLOG_HOME}/config/log4j2.xml \
+      -Djava.library.path=${GRAYLOG_HOME}/lib/sigar/ \
+      -Dgraylog2.installation_source=docker \
+      ${GRAYLOG_HOME}/graylog.jar \
+      server \
+      -f ${GRAYLOG_HOME}/config/graylog.conf
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graylog
+  namespace: graylog
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  ports:
+    - name: graylog
+      port: 9000
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    name: graylog
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: graylog-web
+  namespace: graylog
+spec:
+  ports:
+    - name: graylog
+      port: 80
+      protocol: TCP
+      targetPort: 9000
+    - name: gelf
+      port: 12201
+      protocol: 
+      targetPort: 12201
+    - name: syslog
+      port: 514
+      protocol: 
+      targetPort: 514
+  selector:
+    name: graylog
+  type: "LoadBalancer"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: graylog
+  namespace: graylog
+spec:
+  serviceName: graylog
+  replicas: 1
+  selector:
+    matchLabels:
+      name: graylog
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: graylog
+      annotations:
+    spec:
+      serviceAccountName: graylog
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      initContainers:
+        - name: "setup"
+          image: alpine
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - |
+              rm -rf /usr/share/graylog/data/journal/lost+found
+              wget https://storage.googleapis.com/kubernetes-release/release/v1.18.0/bin/linux/arm64/kubectl -O /k8s/kubectl
+              chmod +x /k8s/kubectl
+              GRAYLOG_HOME=/usr/share/graylog
+              chown -R 1100:1100 ${GRAYLOG_HOME}/data/
+          env:
+          volumeMounts:
+            - name: journal
+              mountPath: /usr/share/graylog/data/journal
+            - name: kubectl
+              mountPath: /k8s
+      containers:
+        - name: graylog-server
+          image: "graylog/graylog:4.1.3-arm64"
+          imagePullPolicy: "IfNotPresent"
+          command:
+            - /entrypoint.sh
+          env:
+            - name: GRAYLOG_SERVER_JAVA_OPTS
+              value: "-Dlog4j2.formatMsgNoLookups=true -Djdk.tls.acknowledgeCloseNotify=true -XX:+UnlockExperimentalVMOptions -XX:NewRatio=1 -XX:MaxMetaspaceSize=256m -server -XX:+ResizeTLAB -XX:-OmitStackTraceInFastThrow -XX:+UnlockExperimentalVMOptions -XX:+UseCGroupMemoryLimitForHeap"
+            - name: GRAYLOG_PASSWORD_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: graylog
+                  key: graylog-password-secret
+            - name: GRAYLOG_ROOT_PASSWORD_SHA2
+              valueFrom:
+                secretKeyRef:
+                  name: graylog
+                  key: graylog-password-sha2
+          securityContext:
+            privileged: false
+          ports:
+            - containerPort: 9000
+              name: graylog
+            - containerPort: 12201
+              name: gelf
+              protocol: 
+            - containerPort: 514
+              name: syslog
+              protocol: 
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1024Mi
+            requests:
+              cpu: 500m
+              memory: 1024Mi
+          startupProbe:
+            httpGet:
+              path: /api/system/lbstatus
+              port: 9000
+            periodSeconds: 60
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/system/lbstatus
+              port: 9000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/system/lbstatus
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+            successThreshold: 1
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: journal
+              mountPath: /usr/share/graylog/data/journal
+            - name: config
+              mountPath: /usr/share/graylog/config
+            - name: entrypoint
+              mountPath: /entrypoint.sh
+              subPath: entrypoint.sh
+            - name: kubectl
+              mountPath: /k8s
+      terminationGracePeriodSeconds: 120
+      volumes:
+        - name: config
+          configMap:
+            name: graylog
+            items:
+              - key: graylog.conf
+                path: graylog.conf
+                mode: 292 # 0444
+              - key: log4j2.xml
+                path: log4j2.xml
+                mode: 292 # 0444
+        - name: entrypoint
+          configMap:
+            name: graylog
+            items:
+              - key: entrypoint.sh
+                path: entrypoint.sh
+                mode: 365 # 0555
+        - name: kubectl
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: journal
+      spec:
+        accessModes:
+          - "ReadWriteOnce"
+        resources:
+          requests:
+            storage: "1Gi"

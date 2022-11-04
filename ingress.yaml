@@ -1,0 +1,32 @@
+
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  name: graylog-web-ingress
+  namespace: graylog
+spec:
+  rules:
+    - host: graylog.medinvention.dev
+      http:
+        paths:
+          - backend:
+              serviceName: graylog-web
+              servicePort: graylog
+            path: /
+          - backend:
+              serviceName: graylog-web
+              servicePort: gelf
+            path: /
+          - backend:
+              serviceName: graylog-web
+              servicePort: syslog
+            path: /
+  tls:
+    - hosts:
+      - graylog.medinvention.dev
+      secretName: graylog-web-tls
+
+
+      
